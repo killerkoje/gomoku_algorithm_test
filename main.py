@@ -344,15 +344,20 @@ HTML = """
   h1 { font-size: 24px; margin-bottom: 12px; letter-spacing: 2px; color: #e0c97f; }
   #status { font-size: 15px; margin-bottom: 14px; color: #94a3b8; min-height: 22px; }
   canvas { border: 2px solid #e0c97f; border-radius: 4px; cursor: pointer; background: #dcb96b; }
-  #btn-reset { margin-top: 16px; padding: 10px 32px; background: #e0c97f; color: #1a1a2e; border: none; border-radius: 6px; font-size: 15px; font-weight: 700; cursor: pointer; letter-spacing: 1px; }
-  #btn-reset:hover { background: #f0d98f; }
+  .controls { display: flex; gap: 12px; margin-top: 16px; }
+  .controls button { padding: 10px 28px; background: #e0c97f; color: #1a1a2e; border: none; border-radius: 6px; font-size: 15px; font-weight: 700; cursor: pointer; letter-spacing: 1px; }
+  .controls button:hover:not(:disabled) { background: #f0d98f; }
+  .controls button:disabled { opacity: 0.4; cursor: not-allowed; }
 </style>
 </head>
 <body>
 <h1>오목 — AI vs 나</h1>
 <div id="status">당신의 차례 (흑)</div>
 <canvas id="board" width="600" height="600"></canvas>
-<button id="btn-reset">다시 시작</button>
+<div class="controls">
+  <button id="btn-undo" disabled>한 수 무르기</button>
+  <button id="btn-reset">다시 시작</button>
+</div>
 
 <script>
 const SIZE = 15;
@@ -365,6 +370,18 @@ const status = document.getElementById('status');
 let board = Array.from({length: SIZE}, () => Array(SIZE).fill(0));
 let gameOver = false;
 let myTurn = true;
+let thinking = false;
+const btnUndo = document.getElementById('btn-undo');
+
+function cloneBoard() {
+  return board.map(row => row.slice());
+}
+
+let history = [cloneBoard()];
+
+function updateUndoBtn() {
+  btnUndo.disabled = thinking || history.length <= 1;
+}
 
 function draw() {
   ctx.clearRect(0, 0, 600, 600);
@@ -414,49 +431,91 @@ function getCell(e) {
 }
 
 canvas.addEventListener('click', async (e) => {
-  if (!myTurn || gameOver) return;
+  if (!myTurn || gameOver || thinking) return;
   const cell = getCell(e);
   if (!cell || board[cell.r][cell.c]) return;
 
   board[cell.r][cell.c] = 1;
   myTurn = false;
+  thinking = true;
+  updateUndoBtn();
   status.textContent = 'AI 생각 중...';
   draw();
 
-  const res = await fetch('/move', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({board, row: cell.r, col: cell.c})
-  });
-  const data = await res.json();
+  let data;
+  try {
+    const res = await fetch('/move', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({board, row: cell.r, col: cell.c})
+    });
+    data = await res.json();
+  } catch {
+    board[cell.r][cell.c] = 0;
+    draw();
+    myTurn = true;
+    thinking = false;
+    updateUndoBtn();
+    status.textContent = '오류가 발생했습니다. 다시 시도하세요.';
+    return;
+  }
 
   if (data.forbidden) {
     board[cell.r][cell.c] = 0;
     draw();
     myTurn = true;
+    thinking = false;
+    updateUndoBtn();
     status.textContent = '⛔ 흑 33 금지! 다른 곳에 두세요.';
     return;
   }
   if (data.win === 1) {
-    draw(); status.textContent = '당신이 이겼습니다! 🎉'; gameOver = true; return;
+    history.push(cloneBoard());
+    draw(); status.textContent = '당신이 이겼습니다! 🎉'; gameOver = true;
+    thinking = false;
+    updateUndoBtn();
+    return;
   }
   board[data.row][data.col] = 2;
   draw();
   if (data.win === 2) {
-    status.textContent = 'AI가 이겼습니다 😈'; gameOver = true; return;
+    history.push(cloneBoard());
+    status.textContent = 'AI가 이겼습니다 😈'; gameOver = true;
+    thinking = false;
+    updateUndoBtn();
+    return;
   }
+  history.push(cloneBoard());
+  myTurn = true;
+  thinking = false;
+  updateUndoBtn();
+  status.textContent = '당신의 차례 (흑)';
+});
+
+btnUndo.addEventListener('click', () => {
+  if (thinking || history.length <= 1) return;
+  history.pop();
+  board = cloneBoard(history[history.length - 1]);
+  gameOver = false;
   myTurn = true;
   status.textContent = '당신의 차례 (흑)';
+  draw();
+  updateUndoBtn();
 });
 
 document.getElementById('btn-reset').addEventListener('click', () => {
   board = Array.from({length: SIZE}, () => Array(SIZE).fill(0));
-  gameOver = false; myTurn = true;
+  history = [cloneBoard()];
+  gameOver = false;
+  myTurn = true;
+  thinking = false;
   status.textContent = '당신의 차례 (흑)';
   draw();
+  updateUndoBtn();
 });
 
 draw();
+updateUndoBtn();
 </script>
 </body>
 </html>
